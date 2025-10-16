@@ -12,13 +12,12 @@
     h1{font-size:20px;margin:0 0 8px}
     .topbar{display:flex;gap:8px;align-items:center;justify-content:space-between}
     .tabs{display:flex;gap:8px;margin:6px 0 14px}
-    .tab{border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:8px 10px;border-radius:10px;cursor:pointer;pointer-events:auto}
+    .tab{border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:8px 10px;border-radius:10px;cursor:pointer}
     .tab.active{outline:2px solid #1f3b66;background:#0f1a33}
-    .hintbtn{border:1px solid var(--line);background:linear-gradient(135deg,#60a5fa,#38bdf8);color:#06121f;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:700;pointer-events:auto}
+    .hintbtn{border:1px solid var(--line);background:linear-gradient(135deg,#60a5fa,#38bdf8);color:#06121f;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:700}
     .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
     textarea{width:100%;min-height:90px;border-radius:10px;background:#0b1328;color:var(--ink);border:1px solid var(--line);padding:8px 10px;resize:vertical;font-size:14px}
     select,button{border-radius:10px;border:1px solid var(--line);background:#0b1328;color:#e5e7eb;padding:8px 10px}
-    button{pointer-events:auto}
     button:disabled{opacity:.6;cursor:not-allowed}
     .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
     .btn-primary{background:linear-gradient(135deg,#60a5fa,#38bdf8);color:#06121f;border:none}
@@ -116,12 +115,24 @@
   function addSig(body){ const s=te.encode('SIG1'); const o=new Uint8Array(s.length+body.length); o.set(s,0); o.set(body,s.length); return o; }
   function stripSig(bytes){ const s=te.encode('SIG1'); if(bytes.length<s.length) return null; for(let i=0;i<s.length;i++) if(bytes[i]!==s[i]) return null; return bytes.slice(s.length); }
 
-  function addPkMeta(encKeyId, bodyBytes){ const meta=te.encode(`PKE:ENC:${encKeyId};`); const o=new Uint8Array(meta.length+bodyBytes.length); o.set(meta,0); o.set(bodyBytes,meta.length); return o; }
+  // 公開鍵モード：暗号化に使った鍵IDを埋め込むメタ
+  function addPkMeta(encKeyId, bodyBytes){
+    const meta=te.encode(`PKE:ENC:${encKeyId};`);
+    const o=new Uint8Array(meta.length+bodyBytes.length);
+    o.set(meta,0); o.set(bodyBytes,meta.length);
+    return o;
+  }
   function parsePkMeta(bytes){
     const head=te.encode('PKE:ENC:'); if(bytes.length<head.length+1) return {ok:false};
     for(let i=0;i<head.length;i++) if(bytes[i]!==head[i]) return {ok:false};
-    let i=head.length, id=[]; while(i<bytes.length){ const c=bytes[i]; if(c===59){ return {ok:true, encId: td.decode(new Uint8Array(id)), rest: bytes.slice(i+1)}; }
-      const ok=(c>=97&&c<=122)||(c>=48&&c<=57)||c===45; if(!ok) return {ok:false}; id.push(c); i++; }
+    let i=head.length, id=[]; while(i<bytes.length){
+      const c=bytes[i];
+      if(c===59){ // ';'
+        return {ok:true, encId: td.decode(new Uint8Array(id)), rest: bytes.slice(i+1)};
+      }
+      const ok=(c>=97&&c<=122)||(c>=48&&c<=57)||c===45; if(!ok) return {ok:false};
+      id.push(c); i++;
+    }
     return {ok:false};
   }
 
@@ -138,16 +149,50 @@
   function invMap(m){ const inv=new Uint8Array(256); for(let i=0;i<256;i++) inv[m[i]]=i; return inv; }
   const MAPS={ "alice-pub":buildMap(PAIRS.alice.pub), "alice-priv":invMap(buildMap(PAIRS.alice.pub)), "bob-pub":buildMap(PAIRS.bob.pub), "bob-priv":invMap(buildMap(PAIRS.bob.pub)) };
 
-  function pubEncrypt(plain, encId){ const m=MAPS[encId]; if(!m) return ''; const payload=addPkMeta(encId, te.encode(plain)); const withSig=addSig(payload); const o=new Uint8Array(withSig.length); for(let j=0;j<withSig.length;j++) o[j]=m[withSig[j]]^0xA7; return toB64(o); }
+  // --- 追加：Bob公開鍵で暗号化した証拠タグ（復号で必須にする） ---
+  const BOB_ONLY_TAG = new TextEncoder().encode('::BOB-PUB-ONLY::');
+  function concatBytes(a,b){ const o=new Uint8Array(a.length+b.length); o.set(a,0); o.set(b,a.length); return o; }
+
+  // 暗号化（選んだ鍵 encId を使用。Bob公開鍵のときのみ BOB_ONLY_TAG を付与）
+  function pubEncrypt(plain, encId){
+    const m = MAPS[encId];
+    if(!m) return '';
+    const body = te.encode(plain);
+    const withMeta = addPkMeta(encId, body);
+    const payload = (encId === 'bob-pub') ? concatBytes(BOB_ONLY_TAG, withMeta) : withMeta;
+    const withSig = addSig(payload);
+    const out = new Uint8Array(withSig.length);
+    for(let i=0;i<withSig.length;i++) out[i] = m[withSig[i]] ^ 0xA7;
+    return toB64(out);
+  }
+
+  // 復号（Bob秘密鍵以外は即失敗。タグとメタを二重チェック）
   function pubDecrypt(b64, decId){
     try{
-      if(decId!=="bob-priv") return {ok:false, reason:'dec-not-bob-priv'};
-      const inv=MAPS["bob-priv"]; const d=fromB64(b64); const o=new Uint8Array(d.length); for(let j=0;j<d.length;j++) o[j]=inv[d[j]^0xA7];
-      const afterSig=stripSig(o); if(!afterSig) return {ok:false, reason:'no-sig'};
-      const meta=parsePkMeta(afterSig); if(!meta.ok) return {ok:false, reason:'no-meta'};
-      if(meta.encId!=="bob-pub") return {ok:false, reason:`enc-not-bob-pub:${meta.encId}`};
-      return {ok:true, text: td.decode(meta.rest), encId: meta.encId};
-    }catch{ return {ok:false, reason:'exception'} }
+      if(decId !== 'bob-priv') return { ok:false, reason:'dec-not-bob-priv' };
+      const inv = MAPS['bob-priv'];
+      const d = fromB64(b64);
+      const o = new Uint8Array(d.length);
+      for(let i=0;i<d.length;i++) o[i] = inv[d[i]^0xA7];
+
+      const afterSig = stripSig(o);
+      if(!afterSig) return { ok:false, reason:'no-sig' };
+
+      // BOB_ONLY_TAG が先頭にあること（Bob公開鍵で暗号化の証拠）
+      if(afterSig.length < BOB_ONLY_TAG.length) return { ok:false, reason:'no-bob-tag' };
+      for(let i=0;i<BOB_ONLY_TAG.length;i++){
+        if(afterSig[i] !== BOB_ONLY_TAG[i]) return { ok:false, reason:'no-bob-tag' };
+      }
+      const afterTag = afterSig.slice(BOB_ONLY_TAG.length);
+
+      const meta = parsePkMeta(afterTag);
+      if(!meta.ok) return { ok:false, reason:'no-meta' };
+      if(meta.encId !== 'bob-pub') return { ok:false, reason:`enc-not-bob-pub:${meta.encId}` };
+
+      return { ok:true, text: td.decode(meta.rest), encId: meta.encId };
+    }catch{
+      return { ok:false, reason:'exception' };
+    }
   }
 
   // ===== UI =====
@@ -175,8 +220,9 @@
     dbg.textContent='';
   }
 
-  // === 要件フラグ：成功/失敗に関わらず「次回は再暗号化から」にできるよう制御 ===
-  let requireFreshCipher=false; // true の間は「復号する」を押しても不可。暗号化で解除。
+  // 成功/失敗に関わらず、次回は必ず「暗号化して送信」から始める制御
+  let requireFreshCipher=true; // 初期は暗号化から
+  btnDecrypt.disabled=true;
 
   function setMode(sym){
     tabSym.classList.toggle('active',sym);
@@ -186,7 +232,7 @@
     document.getElementById('pubSend').style.display = sym ? 'none':'flex';
     document.getElementById('pubRecv').style.display = sym ? 'none':'flex';
 
-    // モード切替時は常に「次は暗号化から」
+    // モード切替時：次は暗号化から
     requireFreshCipher=true;
     btnDecrypt.disabled=true;
     btnEncrypt.disabled=false;
@@ -196,19 +242,18 @@
   }
   tabSym.onclick=()=>setMode(true);
   tabPub.onclick=()=>setMode(false);
-  setMode(true);
 
-  // セレクト変更時：成功状態を引きずらないよう、次は暗号化から
+  // セレクト変更時：成功状態を引きずらない（次は暗号化から）
   [symKeySend, symKeyRecv, pubKeyEnc, pubKeyDec].forEach(sel=>{
     sel.addEventListener('change', ()=>{
       requireFreshCipher=true;
       btnDecrypt.disabled=true;
-      btnEncrypt.disabled=false; // 暗号化は常に可能
+      btnEncrypt.disabled=false;
       resetOutput('鍵の設定が変更されました。「暗号化して送信」から再開してください。');
     });
   });
 
-  // 暗号化（常に押せる / 押すと復号が再び可能になる）
+  // 暗号化：押すと復号を再び許可
   btnEncrypt.onclick=()=>{
     const text=plain.value.trim();
     if(!text){ msg.className='status bad'; msg.textContent='平文を入力してください。'; return; }
@@ -226,14 +271,12 @@
     msg.textContent='暗号化しました。受信側で「復号する」を押してください。';
     plainOut.value='';
 
-    // 新しい暗号文ができたので、復号を再許可
     requireFreshCipher=false;
     btnDecrypt.disabled=false;
   };
 
-  // 復号
+  // 復号：成功でも失敗でも、次は暗号化から
   btnDecrypt.onclick=()=>{
-    // 成功状態を引きずらない：必要なら暗号化から
     if(requireFreshCipher){
       msg.className='status bad';
       msg.textContent='「暗号化して送信」を先に押してください。';
@@ -251,19 +294,15 @@
         msg.className='status bad';
         msg.textContent='復号失敗：鍵の選択が正しいか確認しましょう。';
         plainOut.value='';
-        // 失敗時：次は暗号化から（要件どおり）
-        requireFreshCipher=true;
-        btnDecrypt.disabled=true;
-        btnEncrypt.disabled=false;
       }else{
         msg.className='status ok';
         msg.textContent='復号成功！次は「暗号化して送信」から新しい試行を行ってください。';
         plainOut.value=out;
-        // ★ 成功しても次は暗号化から（ご要望）
-        requireFreshCipher=true;
-        btnDecrypt.disabled=true;
-        btnEncrypt.disabled=false;
       }
+      // 次は暗号化から（成功/失敗問わず）
+      requireFreshCipher=true;
+      btnDecrypt.disabled=true;
+      btnEncrypt.disabled=false;
       dbg.textContent='';
       return;
     }
@@ -275,7 +314,6 @@
       msg.className='status bad';
       msg.textContent='復号失敗：組み合わせが不正です。「暗号化して送信」からやり直してください。';
       plainOut.value='';
-      // 受信者側の窓（cipher）はクリアしない
       requireFreshCipher=true;
       btnDecrypt.disabled=true;
       btnEncrypt.disabled=false;
@@ -284,7 +322,6 @@
       msg.className='status ok';
       msg.textContent='復号成功！次は「暗号化して送信」から新しい試行を行ってください。';
       plainOut.value=res.text;
-      // ★ 成功しても次は暗号化から
       requireFreshCipher=true;
       btnDecrypt.disabled=true;
       btnEncrypt.disabled=false;
@@ -292,12 +329,11 @@
     }
   };
 
-  // クリア
+  // クリア：暗号文は残す仕様
   btnClear.onclick=()=>{
     plain.value='';
-    // 受信者側の窓は消さない仕様：cipherは残す
     plainOut.value='';
-    requireFreshCipher=true;      // 次は暗号化から
+    requireFreshCipher=true;
     btnEncrypt.disabled=false;
     btnDecrypt.disabled=true;
     msg.className='status';
