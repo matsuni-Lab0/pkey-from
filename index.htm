@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>暗号化体験（共通鍵／公開鍵）アプリ</title>
+  <style>
+    :root{--bg:#0e1324;--panel:#111827;--ink:#e5e7eb;--muted:#a3a8b4;--line:rgba(255,255,255,.08);--pri:#60a5fa;--ok:#34d399;--bad:#f43f5e}
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#0e1324,#0a0f1f);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans JP",Arial}
+    .wrap{max-width:900px;margin:20px auto;padding:0 14px}
+    h1{font-size:20px;margin:0 0 8px}
+    .topbar{display:flex;gap:8px;align-items:center;justify-content:space-between}
+    .tabs{display:flex;gap:8px;margin:6px 0 14px}
+    .tab{border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:8px 10px;border-radius:10px;cursor:pointer;pointer-events:auto}
+    .tab.active{outline:2px solid #1f3b66;background:#0f1a33}
+    .hintbtn{border:1px solid var(--line);background:linear-gradient(135deg,#60a5fa,#38bdf8);color:#06121f;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:700;pointer-events:auto}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
+    textarea{width:100%;min-height:90px;border-radius:10px;background:#0b1328;color:#0fe; color:var(--ink);border:1px solid var(--line);padding:8px 10px;resize:vertical;font-size:14px}
+    select,button{border-radius:10px;border:1px solid var(--line);background:#0b1328;color:#e5e7eb;padding:8px 10px}
+    button{pointer-events:auto}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .btn-primary{background:linear-gradient(135deg,#60a5fa,#38bdf8);color:#06121f;border:none}
+    .mini{font-size:12px;color:var(--muted)}
+    .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width:760px){.cols{grid-template-columns:1fr}}
+    .status{padding:8px 10px;border-radius:10px;border:1px solid var(--line);margin-top:8px}
+    .ok{background:rgba(52,211,153,.15)}
+    .bad{background:rgba(244,63,94,.15)}
+    #timer{text-align:right;font-size:13px;color:var(--muted);margin-bottom:6px}
+    .debug{font-size:12px;color:var(--muted);margin-top:6px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>暗号化体験（共通鍵／公開鍵）アプリ</h1>
+    <button id="btnHint" class="hintbtn" type="button">ヒント</button>
+  </div>
+
+  <div id="timer">アクティブ時間: 0秒</div>
+
+  <div class="tabs">
+    <button id="tabSym" class="tab active" type="button">共通鍵</button>
+    <button id="tabPub" class="tab" type="button">公開鍵</button>
+  </div>
+
+  <div id="hintBox" class="card mini" style="display:none"></div>
+
+  <div class="card">
+    <div class="cols">
+      <div>
+        <strong>送信者：Alice</strong>
+        <textarea id="plain" placeholder="例）今日の課題は暗号化です。"></textarea>
+
+        <!-- 共通鍵（送信側） -->
+        <div id="symSend" class="row">
+          <label>鍵を選択：<select id="symKeySend"></select></label>
+        </div>
+
+        <!-- 公開鍵（送信側） -->
+        <div id="pubSend" class="row" style="display:none">
+          <label>暗号化に使う鍵：<select id="pubKeyEnc"></select></label>
+        </div>
+
+        <div class="row">
+          <button id="btnEncrypt" class="btn-primary" type="button">暗号化して送信</button>
+          <button id="btnClear" type="button">クリア</button>
+        </div>
+      </div>
+
+      <div>
+        <strong>受信者：Bob</strong>
+        <textarea id="cipher" placeholder="暗号文" readonly></textarea>
+
+        <!-- 共通鍵（受信側） -->
+        <div id="symRecv" class="row">
+          <label>鍵を選択：<select id="symKeyRecv"></select></label>
+        </div>
+
+        <!-- 公開鍵（受信側） -->
+        <div id="pubRecv" class="row" style="display:none">
+          <label>復号に使う鍵：<select id="pubKeyDec"></select></label>
+        </div>
+
+        <div class="row">
+          <button id="btnDecrypt" class="btn-primary" type="button">復号する</button>
+        </div>
+
+        <textarea id="plainOut" placeholder="復号結果（平文）" readonly></textarea>
+        <div id="msg" class="status">準備OK：モードを選んで体験を始めましょう。</div>
+        <div id="dbg" class="debug"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mini">
+    ※これは教室デモ用の「玩具アルゴリズム」です。実運用では使用しないでください。
+  </div>
+</div>
+
+<script>
+  // ===== タイマー =====
+  let seconds = 0, timer = null;
+  function startTimer(){ if(!timer){ timer=setInterval(()=>{ seconds++; document.getElementById("timer").innerText = `アクティブ時間: ${seconds}秒`; },1000);} }
+  function stopTimer(){ clearInterval(timer); timer=null; }
+  document.addEventListener("visibilitychange",()=>{document.visibilityState==="visible"?startTimer():stopTimer();});
+  window.onload=()=>{if(document.visibilityState==="visible")startTimer();};
+
+  // ===== ユーティリティ =====
+  const te=new TextEncoder(), td=new TextDecoder();
+  const toB64=b=>btoa(String.fromCharCode(...b));
+  const fromB64=b=>new Uint8Array([...atob(b)].map(c=>c.charCodeAt(0)));
+
+  function addSig(body){ const s=te.encode('SIG1'); const o=new Uint8Array(s.length+body.length); o.set(s,0); o.set(body,s.length); return o; }
+  function stripSig(bytes){ const s=te.encode('SIG1'); if(bytes.length<s.length) return null; for(let i=0;i<s.length;i++) if(bytes[i]!==s[i]) return null; return bytes.slice(s.length); }
+
+  function addPkMeta(encKeyId, bodyBytes){ const meta=te.encode(`PKE:ENC:${encKeyId};`); const o=new Uint8Array(meta.length+bodyBytes.length); o.set(meta,0); o.set(bodyBytes,meta.length); return o; }
+  function parsePkMeta(bytes){
+    const head=te.encode('PKE:ENC:'); if(bytes.length<head.length+1) return {ok:false};
+    for(let i=0;i<head.length;i++) if(bytes[i]!==head[i]) return {ok:false};
+    let i=head.length, id=[]; while(i<bytes.length){ const c=bytes[i]; if(c===59){ return {ok:true, encId: td.decode(new Uint8Array(id)), rest: bytes.slice(i+1)}; }
+      const ok=(c>=97&&c<=122)||(c>=48&&c<=57)||c===45; if(!ok) return {ok:false}; id.push(c); i++; }
+    return {ok:false};
+  }
+
+  function hash32(str){ let h=2166136261>>>0; for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=(h*16777619)>>>0;} return h>>>0; }
+  function prng(seed){ let s=seed>>>0; return ()=>{s=(s*1664525+1013904223)>>>0; return (s>>>16)&0xFF;} }
+
+  // ===== 共通鍵 =====
+  function symEncrypt(p,k){ const r=prng(hash32(k)); const d=addSig(te.encode(p)); const o=new Uint8Array(d.length); for(let i=0;i<d.length;i++) o[i]=d[i]^r(); return toB64(o); }
+  function symDecrypt(b,k){ try{ const r=prng(hash32(k)); const d=fromB64(b); const o=new Uint8Array(d.length); for(let i=0;i<d.length;i++) o[i]=d[i]^r(); const body=stripSig(o); if(!body) return null; return td.decode(body);}catch{return null;} }
+
+  // ===== 公開鍵（置換デモ） =====
+  const PAIRS={alice:{pub:"alice-pub-key",priv:"alice-priv-key"}, bob:{pub:"bob-pub-key",priv:"bob-priv-key"}};
+  function buildMap(key){ const a=new Uint8Array(256); for(let i=0;i<256;i++) a[i]=i; let s=hash32(key); for(let i=255;i>0;i--){ s=(s*1103515245+12345)>>>0; const j=s%(i+1); [a[i],a[j]]=[a[j],a[i]];} return a; }
+  function invMap(m){ const inv=new Uint8Array(256); for(let i=0;i<256;i++) inv[m[i]]=i; return inv; }
+  const MAPS={ "alice-pub":buildMap(PAIRS.alice.pub), "alice-priv":invMap(buildMap(PAIRS.alice.pub)), "bob-pub":buildMap(PAIRS.bob.pub), "bob-priv":invMap(buildMap(PAIRS.bob.pub)) };
+
+  function pubEncrypt(plain, encId){ const m=MAPS[encId]; if(!m) return ''; const payload=addPkMeta(encId, te.encode(plain)); const withSig=addSig(payload); const o=new Uint8Array(withSig.length); for(let j=0;j<withSig.length;j++) o[j]=m[withSig[j]]^0xA7; return toB64(o); }
+  function pubDecrypt(b64, decId){
+    try{
+      if(decId!=="bob-priv") return {ok:false, reason:'dec-not-bob-priv'};
+      const inv=MAPS["bob-priv"]; const d=fromB64(b64); const o=new Uint8Array(d.length); for(let j=0;j<d.length;j++) o[j]=inv[d[j]^0xA7];
+      const afterSig=stripSig(o); if(!afterSig) return {ok:false, reason:'no-sig'};
+      const meta=parsePkMeta(afterSig); if(!meta.ok) return {ok:false, reason:'no-meta'};
+      if(meta.encId!=="bob-pub") return {ok:false, reason:`enc-not-bob-pub:${meta.encId}`};
+      return {ok:true, text: td.decode(meta.rest), encId: meta.encId};
+    }catch{ return {ok:false, reason:'exception'} }
+  }
+
+  // ===== UI =====
+  const $=s=>document.querySelector(s);
+  const plain=$('#plain'),cipher=$('#cipher'),plainOut=$('#plainOut'),msg=$('#msg'),dbg=$('#dbg');
+  const symKeySend=$('#symKeySend'),symKeyRecv=$('#symKeyRecv'),pubKeyEnc=$('#pubKeyEnc'),pubKeyDec=$('#pubKeyDec');
+  const btnEncrypt=$('#btnEncrypt'),btnDecrypt=$('#btnDecrypt'),btnHint=$('#btnHint'),btnClear=$('#btnClear');
+  const tabSym=$('#tabSym'), tabPub=$('#tabPub');
+  const hintBox=$('#hintBox');
+
+  const SYM_KEYS=[{id:'Key-A',label:'Key-A'},{id:'Key-B',label:'Key-B'},{id:'Key-C',label:'Key-C'}];
+  const KEY_OPTIONS=[{id:'alice-pub',label:'Alice 公開鍵'},{id:'alice-priv',label:'Alice 秘密鍵'},{id:'bob-pub',label:'Bob 公開鍵'},{id:'bob-priv',label:'Bob 秘密鍵'}];
+  function fill(e,a){ e.innerHTML=a.map(o=>`<option value="${o.id}">${o.label}</option>`).join(''); }
+  fill(symKeySend,SYM_KEYS); fill(symKeyRecv,SYM_KEYS); fill(pubKeyEnc,KEY_OPTIONS); fill(pubKeyDec,KEY_OPTIONS);
+
+  function currentHintText(){ return tabSym.classList.contains('active') ? '【共通鍵のヒント】\n同じ鍵で暗号化・復号します。' : '【公開鍵のヒント】\n成功は「Bob 公開鍵で暗号化 → Bob 秘密鍵で復号」のみ。失敗時は再暗号化が必要です。'; }
+  function toggleHint(){ const show=hintBox.style.display==='none'; hintBox.style.display=show?'block':'none'; btnHint.setAttribute('aria-expanded',show); if(show) hintBox.textContent=currentHintText(); }
+  btnHint.onclick=toggleHint;
+
+  function resetOutput(message){
+    plainOut.value='';
+    msg.className='status';
+    msg.textContent=message||'状態をリセットしました。';
+    dbg.textContent='';
+  }
+
+  let requireFreshCipher=false;     // 公開鍵モードの失敗後、再暗号化を必須にするフラグ
+
+  function setMode(sym){
+    tabSym.classList.toggle('active',sym);
+    tabPub.classList.toggle('active',!sym);
+    document.getElementById('symSend').style.display = sym ? 'flex':'none';
+    document.getElementById('symRecv').style.display = sym ? 'flex':'none';
+    document.getElementById('pubSend').style.display = sym ? 'none':'flex';
+    document.getElementById('pubRecv').style.display = sym ? 'none':'flex';
+
+    // ボタンは必ず有効化
+    btnEncrypt.disabled=false;
+    btnDecrypt.disabled=false;
+    requireFreshCipher=false;
+
+    // 暗号文もクリア（状態の取り違えを避ける）
+    cipher.value='';
+    resetOutput('準備OK：モードを選んで体験を始めましょう。');
+    if(hintBox.style.display!=='none') hintBox.textContent=currentHintText();
+  }
+  tabSym.onclick=()=>setMode(true);
+  tabPub.onclick=()=>setMode(false);
+  setMode(true);
+
+  // セレクト変更時は出力クリア（取り違え防止）
+  [symKeySend, symKeyRecv, pubKeyEnc, pubKeyDec].forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      resetOutput('鍵が変更されました。必要に応じて再度操作してください。');
+      // 暗号化ボタンは常に有効
+      btnEncrypt.disabled=false;
+    });
+  });
+
+  // 暗号化（常に押せるように保証）
+  btnEncrypt.onclick=()=>{
+    btnEncrypt.disabled=false; // 念押し（ブラウザの一時的な状態を復帰）
+    const text=plain.value.trim();
+    if(!text){ msg.className='status bad'; msg.textContent='平文を入力してください。'; return; }
+
+    const sym=tabSym.classList.contains('active');
+    if(sym){
+      cipher.value=symEncrypt(text, symKeySend.value);
+      dbg.textContent='';
+    }else{
+      const encId=pubKeyEnc.value;
+      cipher.value=pubEncrypt(text, encId);
+      dbg.textContent=`暗号文に記録された使用鍵: ${encId}`;
+      // 再暗号化で復号を再許可
+      requireFreshCipher=false;
+      btnDecrypt.disabled=false;
+    }
+    msg.className='status ok';
+    msg.textContent='暗号化しました。受信側で復号を試してください。';
+    plainOut.value='';
+  };
+
+  // 復号
+  btnDecrypt.onclick=()=>{
+    const ct=cipher.value.trim();
+    if(!ct){ msg.className='status bad'; msg.textContent='暗号文がありません。'; return; }
+
+    // 公開鍵モード：失敗後は再暗号化を強制
+    if(requireFreshCipher && tabPub.classList.contains('active')){
+      msg.className='status bad';
+      msg.textContent='復号失敗後のリセット中です。「暗号化して送信」を押して新しい暗号文を作成してください。';
+      // 暗号化ボタンは押せる
+      btnEncrypt.disabled=false;
+      return;
+    }
+
+    const sym=tabSym.classList.contains('active');
+    if(sym){
+      const out=symDecrypt(ct, symKeyRecv.value);
+      if(out===null){ msg.className='status bad'; msg.textContent='復号失敗：鍵の選択が正しいか確認しましょう。'; plainOut.value=''; }
+      else{ msg.className='status ok'; msg.textContent='復号成功！'; plainOut.value=out; }
+      dbg.textContent='';
+      return;
+    }
+
+    // 公開鍵モード
+    const decId=pubKeyDec.value;
+    const res=pubDecrypt(ct, decId);
+    if(!res.ok){
+      // 失敗 → 強制リセット：暗号文を空にし、再暗号化を要求
+      cipher.value='';
+      plainOut.value='';
+      requireFreshCipher=true;
+      btnDecrypt.disabled=true;   // 再暗号化するまで復号は不可
+      btnEncrypt.disabled=false;  // ただし暗号化は常に可能
+      msg.className='status bad';
+      msg.textContent='復号失敗：組み合わせが不正です。暗号文をクリアしました。「暗号化して送信」を押して新しい暗号文を作成してください。';
+      dbg.textContent=`選択した復号鍵: ${decId} / 失敗理由: ${res.reason||'unknown'}`;
+    }else{
+      msg.className='status ok';
+      msg.textContent='復号成功！';
+      plainOut.value=res.text;
+      dbg.textContent=`暗号文の使用鍵: ${res.encId} / 復号鍵: ${decId}`;
+    }
+  };
+
+  // クリア
+  btnClear.onclick=()=>{
+    plain.value=''; cipher.value=''; plainOut.value='';
+    requireFreshCipher=false;
+    btnEncrypt.disabled=false;  // 常に押せるよう復帰
+    btnDecrypt.disabled=false;
+    msg.className='status'; msg.textContent='クリアしました。'; dbg.textContent='';
+  };
+
+  // 最後に安全策：予期せぬ disable を解除
+  queueMicrotask(()=>{ btnEncrypt.disabled=false; });
+</script>
+</body>
+</html>
