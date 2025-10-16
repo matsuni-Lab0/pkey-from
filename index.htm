@@ -16,7 +16,7 @@
     .tab.active{outline:2px solid #1f3b66;background:#0f1a33}
     .hintbtn{border:1px solid var(--line);background:linear-gradient(135deg,#60a5fa,#38bdf8);color:#06121f;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:700;pointer-events:auto}
     .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
-    textarea{width:100%;min-height:90px;border-radius:10px;background:#0b1328;color:#0fe; color:var(--ink);border:1px solid var(--line);padding:8px 10px;resize:vertical;font-size:14px}
+    textarea{width:100%;min-height:90px;border-radius:10px;background:#0b1328;color:var(--ink);border:1px solid var(--line);padding:8px 10px;resize:vertical;font-size:14px}
     select,button{border-radius:10px;border:1px solid var(--line);background:#0b1328;color:#e5e7eb;padding:8px 10px}
     button{pointer-events:auto}
     button:disabled{opacity:.6;cursor:not-allowed}
@@ -163,18 +163,20 @@
   function fill(e,a){ e.innerHTML=a.map(o=>`<option value="${o.id}">${o.label}</option>`).join(''); }
   fill(symKeySend,SYM_KEYS); fill(symKeyRecv,SYM_KEYS); fill(pubKeyEnc,KEY_OPTIONS); fill(pubKeyDec,KEY_OPTIONS);
 
-  function currentHintText(){ return tabSym.classList.contains('active') ? '【共通鍵のヒント】\n同じ鍵で暗号化・復号します。' : '【公開鍵のヒント】\n成功は「Bob 公開鍵で暗号化 → Bob 秘密鍵で復号」のみ。失敗時は再暗号化が必要です。'; }
+  function currentHintText(){ return tabSym.classList.contains('active') ? '【共通鍵のヒント】\n同じ鍵で暗号化・復号します。' : '【公開鍵のヒント】\n成功は「Bob 公開鍵で暗号化 → Bob 秘密鍵で復号」のみ。次の試行は再暗号化から。'; }
   function toggleHint(){ const show=hintBox.style.display==='none'; hintBox.style.display=show?'block':'none'; btnHint.setAttribute('aria-expanded',show); if(show) hintBox.textContent=currentHintText(); }
   btnHint.onclick=toggleHint;
 
   function resetOutput(message){
+    // 受信者側の窓（cipher）はクリアしない方針
     plainOut.value='';
     msg.className='status';
     msg.textContent=message||'状態をリセットしました。';
     dbg.textContent='';
   }
 
-  let requireFreshCipher=false;     // 公開鍵モードの失敗後、再暗号化を必須にするフラグ
+  // === 要件フラグ：成功/失敗に関わらず「次回は再暗号化から」にできるよう制御 ===
+  let requireFreshCipher=false; // true の間は「復号する」を押しても不可。暗号化で解除。
 
   function setMode(sym){
     tabSym.classList.toggle('active',sym);
@@ -184,32 +186,30 @@
     document.getElementById('pubSend').style.display = sym ? 'none':'flex';
     document.getElementById('pubRecv').style.display = sym ? 'none':'flex';
 
-    // ボタンは必ず有効化
+    // モード切替時は常に「次は暗号化から」
+    requireFreshCipher=true;
+    btnDecrypt.disabled=true;
     btnEncrypt.disabled=false;
-    btnDecrypt.disabled=false;
-    requireFreshCipher=false;
 
-    // 暗号文もクリア（状態の取り違えを避ける）
-    cipher.value='';
-    resetOutput('準備OK：モードを選んで体験を始めましょう。');
+    resetOutput('モードが切り替わりました。「暗号化して送信」から再開してください。');
     if(hintBox.style.display!=='none') hintBox.textContent=currentHintText();
   }
   tabSym.onclick=()=>setMode(true);
   tabPub.onclick=()=>setMode(false);
   setMode(true);
 
-  // セレクト変更時は出力クリア（取り違え防止）
+  // セレクト変更時：成功状態を引きずらないよう、次は暗号化から
   [symKeySend, symKeyRecv, pubKeyEnc, pubKeyDec].forEach(sel=>{
     sel.addEventListener('change', ()=>{
-      resetOutput('鍵が変更されました。必要に応じて再度操作してください。');
-      // 暗号化ボタンは常に有効
-      btnEncrypt.disabled=false;
+      requireFreshCipher=true;
+      btnDecrypt.disabled=true;
+      btnEncrypt.disabled=false; // 暗号化は常に可能
+      resetOutput('鍵の設定が変更されました。「暗号化して送信」から再開してください。');
     });
   });
 
-  // 暗号化（常に押せるように保証）
+  // 暗号化（常に押せる / 押すと復号が再び可能になる）
   btnEncrypt.onclick=()=>{
-    btnEncrypt.disabled=false; // 念押し（ブラウザの一時的な状態を復帰）
     const text=plain.value.trim();
     if(!text){ msg.className='status bad'; msg.textContent='平文を入力してください。'; return; }
 
@@ -221,34 +221,49 @@
       const encId=pubKeyEnc.value;
       cipher.value=pubEncrypt(text, encId);
       dbg.textContent=`暗号文に記録された使用鍵: ${encId}`;
-      // 再暗号化で復号を再許可
-      requireFreshCipher=false;
-      btnDecrypt.disabled=false;
     }
     msg.className='status ok';
-    msg.textContent='暗号化しました。受信側で復号を試してください。';
+    msg.textContent='暗号化しました。受信側で「復号する」を押してください。';
     plainOut.value='';
+
+    // 新しい暗号文ができたので、復号を再許可
+    requireFreshCipher=false;
+    btnDecrypt.disabled=false;
   };
 
   // 復号
   btnDecrypt.onclick=()=>{
-    const ct=cipher.value.trim();
-    if(!ct){ msg.className='status bad'; msg.textContent='暗号文がありません。'; return; }
-
-    // 公開鍵モード：失敗後は再暗号化を強制
-    if(requireFreshCipher && tabPub.classList.contains('active')){
+    // 成功状態を引きずらない：必要なら暗号化から
+    if(requireFreshCipher){
       msg.className='status bad';
-      msg.textContent='復号失敗後のリセット中です。「暗号化して送信」を押して新しい暗号文を作成してください。';
-      // 暗号化ボタンは押せる
-      btnEncrypt.disabled=false;
+      msg.textContent='「暗号化して送信」を先に押してください。';
       return;
     }
 
+    const ct=cipher.value.trim();
+    if(!ct){ msg.className='status bad'; msg.textContent='暗号文がありません。'; return; }
+
     const sym=tabSym.classList.contains('active');
+
     if(sym){
       const out=symDecrypt(ct, symKeyRecv.value);
-      if(out===null){ msg.className='status bad'; msg.textContent='復号失敗：鍵の選択が正しいか確認しましょう。'; plainOut.value=''; }
-      else{ msg.className='status ok'; msg.textContent='復号成功！'; plainOut.value=out; }
+      if(out===null){
+        msg.className='status bad';
+        msg.textContent='復号失敗：鍵の選択が正しいか確認しましょう。';
+        plainOut.value='';
+        // 失敗時：次は暗号化から（要件どおり）
+        requireFreshCipher=true;
+        btnDecrypt.disabled=true;
+        btnEncrypt.disabled=false;
+      }else{
+        msg.className='status ok';
+        msg.textContent='復号成功！次は「暗号化して送信」から新しい試行を行ってください。';
+        plainOut.value=out;
+        // ★ 成功しても次は暗号化から（ご要望）
+        requireFreshCipher=true;
+        btnDecrypt.disabled=true;
+        btnEncrypt.disabled=false;
+      }
       dbg.textContent='';
       return;
     }
@@ -257,34 +272,38 @@
     const decId=pubKeyDec.value;
     const res=pubDecrypt(ct, decId);
     if(!res.ok){
-      // 失敗 → 強制リセット：暗号文を空にし、再暗号化を要求
-      cipher.value='';
-      plainOut.value='';
-      requireFreshCipher=true;
-      btnDecrypt.disabled=true;   // 再暗号化するまで復号は不可
-      btnEncrypt.disabled=false;  // ただし暗号化は常に可能
       msg.className='status bad';
-      msg.textContent='復号失敗：組み合わせが不正です。暗号文をクリアしました。「暗号化して送信」を押して新しい暗号文を作成してください。';
+      msg.textContent='復号失敗：組み合わせが不正です。「暗号化して送信」からやり直してください。';
+      plainOut.value='';
+      // 受信者側の窓（cipher）はクリアしない
+      requireFreshCipher=true;
+      btnDecrypt.disabled=true;
+      btnEncrypt.disabled=false;
       dbg.textContent=`選択した復号鍵: ${decId} / 失敗理由: ${res.reason||'unknown'}`;
     }else{
       msg.className='status ok';
-      msg.textContent='復号成功！';
+      msg.textContent='復号成功！次は「暗号化して送信」から新しい試行を行ってください。';
       plainOut.value=res.text;
+      // ★ 成功しても次は暗号化から
+      requireFreshCipher=true;
+      btnDecrypt.disabled=true;
+      btnEncrypt.disabled=false;
       dbg.textContent=`暗号文の使用鍵: ${res.encId} / 復号鍵: ${decId}`;
     }
   };
 
   // クリア
   btnClear.onclick=()=>{
-    plain.value=''; cipher.value=''; plainOut.value='';
-    requireFreshCipher=false;
-    btnEncrypt.disabled=false;  // 常に押せるよう復帰
-    btnDecrypt.disabled=false;
-    msg.className='status'; msg.textContent='クリアしました。'; dbg.textContent='';
+    plain.value='';
+    // 受信者側の窓は消さない仕様：cipherは残す
+    plainOut.value='';
+    requireFreshCipher=true;      // 次は暗号化から
+    btnEncrypt.disabled=false;
+    btnDecrypt.disabled=true;
+    msg.className='status';
+    msg.textContent='クリアしました。「暗号化して送信」から再開してください。';
+    dbg.textContent='';
   };
-
-  // 最後に安全策：予期せぬ disable を解除
-  queueMicrotask(()=>{ btnEncrypt.disabled=false; });
 </script>
 </body>
 </html>
